@@ -4,7 +4,7 @@
  * Loaded via script: https://accounts.google.com/gsi/client
  */
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
+const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
 
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.appdata",
@@ -22,6 +22,10 @@ export interface GoogleSession {
 }
 
 const SESSION_KEY = "bharti-google-session";
+
+export function hasGoogleClientId(): boolean {
+  return CLIENT_ID.length > 0;
+}
 
 // ── Session persistence ───────────────────────────────────────────────────────
 
@@ -66,6 +70,14 @@ async function fetchUserInfo(
 /** Triggers the Google OAuth picker and returns a resolved session. */
 export function signIn(): Promise<GoogleSession> {
   return new Promise((resolve, reject) => {
+    if (!hasGoogleClientId()) {
+      reject(
+        new Error(
+          "Google sign-in is not configured for this build. Set VITE_GOOGLE_CLIENT_ID and rebuild the app.",
+        ),
+      );
+      return;
+    }
     if (!window.google?.accounts?.oauth2) {
       reject(new Error("Google Identity Services not loaded yet. Please wait and try again."));
       return;
@@ -132,15 +144,31 @@ export function isGISReady(): boolean {
 export function silentRefresh(): Promise<GoogleSession | null> {
   return new Promise((resolve) => {
     const s = getSession();
-    if (!s) { resolve(null); return; }
-    if (s.expiresAt - Date.now() > 5 * 60_000) { resolve(s); return; }
-    if (!isGISReady()) { resolve(s); return; } // can't refresh, return stale
+    if (!s) {
+      resolve(null);
+      return;
+    }
+    if (s.expiresAt - Date.now() > 5 * 60_000) {
+      resolve(s);
+      return;
+    }
+    if (!hasGoogleClientId()) {
+      resolve(s);
+      return;
+    }
+    if (!isGISReady()) {
+      resolve(s);
+      return;
+    } // can't refresh, return stale
 
     const client = window.google!.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: SCOPES,
       callback: (resp) => {
-        if (resp.error || !resp.access_token) { resolve(s); return; }
+        if (resp.error || !resp.access_token) {
+          resolve(s);
+          return;
+        }
         const updated: GoogleSession = {
           ...s,
           accessToken: resp.access_token,

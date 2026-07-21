@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   User, Database, FileDown, FileUp, FileJson, FileSpreadsheet, HardDrive,
   Fingerprint, Lock, Clock, Sun, Moon, SunMoon, Info, Shield, FileText,
   Trash2, Printer, Sparkles, FolderOpen, Cloud, RefreshCw, CheckCircle2, CloudUpload,
-  MessageCircle, Store, QrCode, Link as LinkIcon,
+  MessageCircle, Store, QrCode, Link as LinkIcon, LogOut, CloudUpload as DriveIcon,
+  CloudDownload,
 } from "lucide-react";
 import { loadDemoData } from "../lib/seed";
 import { db } from "../lib/db";
@@ -28,6 +29,9 @@ import {
   getShopName, setShopName as saveShopName,
   getIncludeShopName, setIncludeShopName as saveIncludeShopName,
 } from "../lib/communicationSettings";
+import { useAuth } from "../lib/authContext";
+import { signOut } from "../lib/googleAuth";
+import { backupToDrive, restoreFromDrive, getLastDriveBackup, clearDriveMeta } from "../lib/driveBackup";
 
 const APP_VERSION = "1.0.0";
 
@@ -45,7 +49,9 @@ function formatTime(iso: string): string {
 }
 
 function SettingsPage() {
+  const navigate = useNavigate();
   const { mode, setMode } = useTheme();
+  const { session, setSession } = useAuth();
   const [size, setSizeState] = useState<PrintSize>("a4");
   const [storage, setStorage] = useState<{ usedMB: number; quotaMB: number } | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -53,6 +59,11 @@ function SettingsPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [backupFolderName, setBackupFolderName] = useState<string | null>(null);
+  // Account / Drive
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [lastDriveBackup, setLastDriveBackupState] = useState<string | null>(null);
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [confirmClearData, setConfirmClearData] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
@@ -73,11 +84,56 @@ function SettingsPage() {
     getSavedDirectoryHandle().then((h) => setBackupFolderName(h?.name ?? null));
     setShopNameState(getShopName());
     setIncludeShopNameState(getIncludeShopName());
+    setLastDriveBackupState(getLastDriveBackup());
   }, []);
 
   function flash(msg: string) {
     setToast(msg);
     setTimeout(() => setToast(null), 1800);
+  }
+
+  // ── Drive backup / restore ──────────────────────────────────────────────────
+  async function doDriveBackup() {
+    setDriveBusy(true);
+    try {
+      const r = await backupToDrive();
+      setLastDriveBackupState(r.lastBackup);
+      flash(`Drive Backup Complete · ${r.updated} updated, ${r.unchanged} unchanged`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Drive backup failed");
+    } finally { setDriveBusy(false); }
+  }
+
+  async function doDriveRestore() {
+    setDriveBusy(true);
+    try {
+      const r = await restoreFromDrive();
+      setLastDriveBackupState(getLastDriveBackup());
+      flash(`Restore Complete · ${r.customers} customers, ${r.transactions} txns`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Drive restore failed");
+    } finally { setDriveBusy(false); }
+  }
+
+  // ── Logout ──────────────────────────────────────────────────────────────────
+  function doLogout() {
+    setConfirmLogout(false);
+    signOut();
+    setSession(null);
+    // Show "remove data?" next
+    setConfirmClearData(true);
+  }
+
+  async function doLogoutClearData() {
+    setConfirmClearData(false);
+    await clearAll();
+    clearDriveMeta();
+    navigate({ to: "/login", replace: true });
+  }
+
+  function doLogoutKeepData() {
+    setConfirmClearData(false);
+    navigate({ to: "/login", replace: true });
   }
 
   async function doBackupNow() {
@@ -177,11 +233,61 @@ function SettingsPage() {
     <div className="app-frame flex flex-col">
       <TopBar title="Settings" showBack />
       <main className="flex-1 pb-16">
+
+        {/* ── Account ─────────────────────────────────────────── */}
+        {session && (
+          <Group title="Account">
+            {/* Profile card */}
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-[color:var(--border)]">
+              <img
+                src={session.picture}
+                alt={session.name}
+                className="h-12 w-12 rounded-full object-cover ring-2 ring-[color:var(--border)] shrink-0"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+              <div className="min-w-0">
+                <div className="font-semibold text-[15px] text-[color:var(--foreground)] truncate">
+                  {session.name}
+                </div>
+                <div className="text-[13px] text-[color:var(--muted-foreground)] truncate">
+                  {session.email}
+                </div>
+              </div>
+            </div>
+            <Row
+              icon={driveBusy ? <RefreshCw size={16} className="animate-spin" /> : <CloudUpload size={16} />}
+              iconBg="#007aff"
+              label={driveBusy ? "Working…" : "Backup Now (Drive)"}
+              onClick={!driveBusy ? doDriveBackup : undefined}
+            />
+            <Row
+              icon={<CloudDownload size={16} />}
+              iconBg="#34c759"
+              label="Restore from Drive"
+              onClick={!driveBusy ? doDriveRestore : undefined}
+            />
+            <Row
+              icon={<CheckCircle2 size={16} />}
+              iconBg={lastDriveBackup ? "#34c759" : "#8e8e93"}
+              label="Last Drive Backup"
+              value={lastDriveBackup ? formatTime(lastDriveBackup) : "Never"}
+            />
+            <Row
+              icon={<LogOut size={16} />}
+              iconBg="#ff3b30"
+              label="Logout"
+              labelColor="var(--danger)"
+              onClick={() => setConfirmLogout(true)}
+            />
+          </Group>
+        )}
+
         {/* General */}
         <Group title="General">
           <Row icon={<Info size={16} />} iconBg="#8e8e93" label="App Version" value={APP_VERSION} />
           <Row icon={<HardDrive size={16} />} iconBg="#5856d6" label="Storage Used" value={storage ? `${storage.usedMB} MB` : "—"} />
           <Row icon={<User size={16} />} iconBg="#34c759" label="Total Customers" value={customerCount} />
+
           <Row icon={<Database size={16} />} iconBg="#007aff" label="Total Transactions" value={txCount} />
         </Group>
 
@@ -364,6 +470,46 @@ function SettingsPage() {
             }}
             confirmLabel="Save"
           />
+        </Sheet>
+      )}
+
+      {/* Logout confirmation */}
+      {confirmLogout && (
+        <Sheet open title="Logout" onClose={() => setConfirmLogout(false)}>
+          <p className="text-center text-[14px] text-[color:var(--muted-foreground)] leading-relaxed">
+            Logout from this device?<br />
+            <span className="text-[13px]">You can sign back in anytime.</span>
+          </p>
+          <SheetButtons
+            onCancel={() => setConfirmLogout(false)}
+            onConfirm={doLogout}
+            confirmLabel="Logout"
+            danger
+          />
+        </Sheet>
+      )}
+
+      {/* Remove local data after logout */}
+      {confirmClearData && (
+        <Sheet open title="Remove Local Data?" onClose={doLogoutKeepData}>
+          <p className="text-center text-[14px] text-[color:var(--muted-foreground)] leading-relaxed">
+            Remove all local data from this device?<br />
+            <span className="text-[13px]">Your Google Drive backup will be kept safe.</span>
+          </p>
+          <div className="mt-4 flex flex-col gap-2">
+            <button
+              onClick={doLogoutClearData}
+              className="w-full h-12 rounded-[12px] bg-[color:var(--danger)] text-white font-semibold text-[15px] tap"
+            >
+              Remove Local Data
+            </button>
+            <button
+              onClick={doLogoutKeepData}
+              className="w-full h-12 rounded-[12px] bg-[color:var(--surface-2)] border border-[color:var(--border)] text-[color:var(--foreground)] font-semibold text-[15px] tap"
+            >
+              Keep Local Data
+            </button>
+          </div>
         </Sheet>
       )}
 

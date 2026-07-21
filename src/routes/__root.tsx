@@ -4,13 +4,32 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useNavigate,
+  useLocation,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { initTheme } from "../lib/theme";
+import { getSession } from "../lib/googleAuth";
+import { AuthProvider, useAuth } from "../lib/authContext";
+import { InstallPrompt } from "../components/InstallPrompt";
+import { UpdatePrompt } from "../components/UpdatePrompt";
+
+// ── Service worker registration ───────────────────────────────────────────────
+
+function registerSW() {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // SW not critical — fail silently
+    });
+  });
+}
+
+// ── 404 / Error components ────────────────────────────────────────────────────
 
 function NotFoundComponent() {
   return (
@@ -37,7 +56,6 @@ function NotFoundComponent() {
 function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   const router = useRouter();
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
@@ -45,14 +63,11 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
           This page didn't load
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Something went wrong on our end. You can try refreshing or head back home.
+          Something went wrong. Try refreshing or go back home.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
-            onClick={() => {
-              router.invalidate();
-              reset();
-            }}
+            onClick={() => { router.invalidate(); reset(); }}
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             Try again
@@ -69,24 +84,23 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
+// ── Route definition ──────────────────────────────────────────────────────────
+
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" },
-      { name: "theme-color", content: "#ffffff" },
+      { name: "theme-color", content: "#007aff" },
       { name: "apple-mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-status-bar-style", content: "default" },
       { name: "apple-mobile-web-app-title", content: "Bharti Udhari" },
       { title: "Bharti Udhari — Offline Credit Ledger" },
       { name: "description", content: "Simple offline udhari (credit) ledger for local shops. Track customers, transactions and pending balances." },
       { property: "og:title", content: "Bharti Udhari — Offline Credit Ledger" },
-      { property: "og:description", content: "Simple offline udhari (credit) ledger for local shops. Track customers, transactions and pending balances." },
+      { property: "og:description", content: "Simple offline udhari (credit) ledger for local shops." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:title", content: "Bharti Udhari — Offline Credit Ledger" },
-      { name: "twitter:description", content: "Simple offline udhari (credit) ledger for local shops. Track customers, transactions and pending balances." },
-
     ],
     links: [
       { rel: "stylesheet", href: appCss },
@@ -106,6 +120,8 @@ function RootShell({ children }: { children: ReactNode }) {
     <html lang="en">
       <head>
         <HeadContent />
+        {/* Google Identity Services — async so it never blocks rendering */}
+        <script src="https://accounts.google.com/gsi/client" async defer />
       </head>
       <body>
         {children}
@@ -115,13 +131,67 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
+// ── Auth guard ────────────────────────────────────────────────────────────────
+
+function AuthGuard({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { session } = useAuth();
+  const [ready, setReady] = useState(false);
+
+  const isLoginPage = location.pathname === "/login";
+
+  useEffect(() => {
+    // Run only on client — localStorage is not available on server
+    setReady(true);
+    const s = getSession();
+    if (!s && !isLoginPage) {
+      navigate({ to: "/login", replace: true });
+    } else if (s && isLoginPage) {
+      navigate({ to: "/", replace: true });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Also react to runtime session changes (login/logout without page reload)
+  useEffect(() => {
+    if (!ready) return;
+    if (!session && !isLoginPage) {
+      navigate({ to: "/login", replace: true });
+    } else if (session && isLoginPage) {
+      navigate({ to: "/", replace: true });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, isLoginPage, ready]);
+
+  // During SSR / before hydration: render children to avoid mismatch
+  if (!ready) return <>{children}</>;
+
+  // Client: if unauthenticated and not already on login, show nothing (redirect pending)
+  if (!session && !isLoginPage) return null;
+
+  return <>{children}</>;
+}
+
+// ── Root component ────────────────────────────────────────────────────────────
+
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
-  useEffect(() => { initTheme(); }, []);
+
+  useEffect(() => {
+    initTheme();
+    registerSW();
+  }, []);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <Outlet />
-    </QueryClientProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthGuard>
+          <Outlet />
+        </AuthGuard>
+        <InstallPrompt />
+        <UpdatePrompt />
+      </QueryClientProvider>
+    </AuthProvider>
   );
 }

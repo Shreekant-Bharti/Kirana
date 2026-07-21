@@ -1,25 +1,48 @@
 {
   "name": "Bharti Udhari",
-  "short_name": "Udhari",
-  "description": "Offline credit ledger for local shops",
+  "short_name": "Bharti Udhari",
+  "description": "Offline credit ledger for local shops. Track customers, transactions and pending balances.",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
+  "theme_color": "#007aff",
   "background_color": "#ffffff",
-  "theme_color": "#ffffff",
+  "categories": ["finance", "business", "productivity"],
+  "lang": "en-IN",
   "icons": [
     {
       "src": "/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Add Customer",
+      "short_name": "Add",
+      "description": "Open the app to add a new customer",
+      "url": "/?action=add-customer",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Settings",
+      "short_name": "Settings",
+      "description": "Open app settings",
+      "url": "/settings",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }

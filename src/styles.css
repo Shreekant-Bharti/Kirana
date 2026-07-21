@@ -1,0 +1,151 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-2xl: 28px;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-hairline: var(--hairline);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --shadow-card: 0 1px 2px rgba(15,15,15,0.04), 0 1px 1px rgba(15,15,15,0.03);
+  --shadow-elevated: 0 4px 16px rgba(15,15,15,0.08), 0 1px 2px rgba(15,15,15,0.04);
+  --shadow-fab: 0 8px 24px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08);
+}
+
+:root {
+  --background: #f2f2f7;   /* iOS grouped bg */
+  --surface: #ffffff;
+  --surface-2: #f7f7fa;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --muted: #f2f2f7;
+  --muted-foreground: #6b6b70;
+  --border: #e5e5ea;        /* iOS separator */
+  --hairline: #d1d1d6;
+  --primary: #0a0a0a;
+  --primary-foreground: #ffffff;
+  --accent: #007aff;        /* iOS blue */
+  --success: #34c759;
+  --danger: #ff3b30;
+}
+
+.dark {
+  --background: #000000;
+  --surface: #1c1c1e;
+  --surface-2: #2c2c2e;
+  --foreground: #f5f5f7;
+  --card: #1c1c1e;
+  --card-foreground: #f5f5f7;
+  --muted: #2c2c2e;
+  --muted-foreground: #98989f;
+  --border: #38383a;
+  --hairline: #48484a;
+  --primary: #ffffff;
+  --primary-foreground: #0a0a0a;
+  --accent: #0a84ff;
+  --success: #30d158;
+  --danger: #ff453a;
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-elevated: 0 6px 20px rgba(0,0,0,0.5);
+}
+
+html, body, #root { height: 100%; }
+html { background: var(--background); }
+body {
+  font-family: var(--font-sans);
+  color: var(--foreground);
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  font-feature-settings: "ss01","cv11";
+}
+* { border-color: var(--border); }
+
+/* App frame — iOS-like phone canvas */
+.app-frame {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  background: var(--background);
+  position: relative;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* iOS-style grouped list rows */
+.ios-group {
+  background: var(--surface);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+.ios-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  min-height: 52px;
+  background: var(--surface);
+  color: var(--foreground);
+  transition: background-color .15s ease;
+}
+.ios-row + .ios-row { border-top: 1px solid var(--border); }
+.ios-row:active { background: color-mix(in oklab, var(--surface), #000 4%); }
+
+/* Tap feedback */
+.tap { transition: background-color .15s ease, transform .1s ease, opacity .15s ease; }
+.tap:active { transform: scale(0.997); }
+
+/* Fade in */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: none; } }
+.animate-fade-up { animation: fadeUp .18s ease-out; }
+@keyframes sheetIn { from { transform: translateY(100%);} to { transform: translateY(0);} }
+.animate-sheet-in { animation: sheetIn .22s cubic-bezier(.22,.61,.36,1); }
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+.animate-overlay-in { animation: overlayIn .15s ease-out; }
+
+/* Skeleton */
+@keyframes shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--muted) 0%, color-mix(in oklab, var(--muted), #fff 30%) 50%, var(--muted) 100%);
+  background-size: 200px 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 8px;
+}
+.dark .skeleton {
+  background: linear-gradient(90deg, #2c2c2e 0%, #3a3a3c 50%, #2c2c2e 100%);
+  background-size: 200px 100%;
+}
+
+/* Print */
+@media print {
+  html, body, #root, .app-frame { background: #fff !important; color: #000 !important; }
+  .no-print { display: none !important; }
+  .print-area { display: block !important; }
+  .app-frame { max-width: none; box-shadow: none; padding: 0; }
+}
+.print-area { display: none; }

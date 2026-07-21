@@ -1,30 +1,49 @@
 import { useState, useEffect } from "react";
-import { Download } from "lucide-react";
+import { Download, Share } from "lucide-react";
 
 /**
- * Shows a "Install Bharti Udhari" banner when the browser fires the
- * beforeinstallprompt event (Chrome/Edge on Android and desktop).
+ * Shows a custom PWA install prompt card:
+ * - On Android Chrome/Edge: listens for `beforeinstallprompt` and triggers native install dialog.
+ * - On iOS Safari: displays instructions ("Tap Share -> Add to Home Screen").
  * Respects a 7-day dismissal cooldown stored in localStorage.
  */
 export function InstallPrompt() {
   const [prompt, setPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isIos, setIsIos] = useState(false);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    // Check dismissal cooldown
+    if (typeof window === "undefined") return;
+
+    // Check if already running as standalone PWA
+    const isStandalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      (navigator as unknown as { standalone?: boolean }).standalone === true;
+    if (isStandalone) return;
+
+    // Check dismissal cooldown (7 days)
     const dismissed = Number(localStorage.getItem("bharti-install-dismissed") ?? 0);
     if (Date.now() - dismissed < 7 * 24 * 60 * 60 * 1000) return;
 
-    // Already installed?
-    if (window.matchMedia("(display-mode: standalone)").matches) return;
+    // Detect iOS Safari
+    const ua = window.navigator.userAgent;
+    const ios = /iPhone|iPad|iPod/.test(ua) && !/CriOS|FxiOS|OPiOS/.test(ua);
 
-    function handle(e: BeforeInstallPromptEvent) {
+    if (ios) {
+      setIsIos(true);
+      setVisible(true);
+      return;
+    }
+
+    // Android / Chrome / Edge native install prompt listener
+    function handleBeforeInstallPrompt(e: BeforeInstallPromptEvent) {
       e.preventDefault();
       setPrompt(e);
       setVisible(true);
     }
-    window.addEventListener("beforeinstallprompt", handle);
-    return () => window.removeEventListener("beforeinstallprompt", handle);
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
   }, []);
 
   async function handleInstall() {
@@ -41,7 +60,7 @@ export function InstallPrompt() {
     setVisible(false);
   }
 
-  if (!visible || !prompt) return null;
+  if (!visible) return null;
 
   return (
     <div className="no-print fixed bottom-[90px] inset-x-4 z-50 flex justify-center pointer-events-none">
@@ -54,13 +73,16 @@ export function InstallPrompt() {
           />
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-[15px] text-[color:var(--foreground)]">
-              Install Bharti Udhari
+              Install Bharti Udhari App
             </div>
             <div className="mt-0.5 text-[13px] text-[color:var(--muted-foreground)] leading-relaxed">
-              Faster access and complete offline support.
+              {isIos
+                ? 'Tap the Share button below, then select "Add to Home Screen"'
+                : "Install for faster access and full offline support."}
             </div>
           </div>
         </div>
+
         <div className="mt-3 flex gap-2">
           <button
             onClick={handleLater}
@@ -68,13 +90,20 @@ export function InstallPrompt() {
           >
             Later
           </button>
-          <button
-            onClick={handleInstall}
-            className="flex-1 h-10 rounded-[10px] bg-[color:var(--accent)] text-white text-[14px] font-semibold flex items-center justify-center gap-1.5 tap"
-          >
-            <Download size={15} strokeWidth={2.5} />
-            Install
-          </button>
+          {!isIos && prompt ? (
+            <button
+              onClick={handleInstall}
+              className="flex-1 h-10 rounded-[10px] bg-[color:var(--accent)] text-white text-[14px] font-semibold flex items-center justify-center gap-1.5 tap"
+            >
+              <Download size={15} strokeWidth={2.5} />
+              Install
+            </button>
+          ) : isIos ? (
+            <div className="flex-1 h-10 rounded-[10px] bg-[color:var(--accent)]/15 text-[color:var(--accent)] text-[13px] font-semibold flex items-center justify-center gap-1.5">
+              <Share size={15} />
+              Tap Share → Add
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

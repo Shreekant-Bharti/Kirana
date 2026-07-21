@@ -29,6 +29,13 @@ interface TokenClientConfig {
   error_callback?: (error: { type: string }) => void;
 }
 
+interface IdInitializeConfig {
+  client_id: string;
+  callback: (credentialResponse: unknown) => void;
+  auto_select?: boolean;
+  cancel_on_tap_outside?: boolean;
+}
+
 interface TokenClient {
   requestAccessToken(overrideConfig?: OverridableTokenClientConfig): void;
 }
@@ -47,7 +54,7 @@ declare global {
           ): boolean;
         };
         id: {
-          initialize(config: unknown): void;
+          initialize(config: IdInitializeConfig): void;
           renderButton(parent: HTMLElement, options: unknown): void;
           prompt(callback?: (notification: unknown) => void): void;
           disableAutoSelect(): void;

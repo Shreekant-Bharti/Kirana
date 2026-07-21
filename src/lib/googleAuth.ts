@@ -5,6 +5,12 @@
  */
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
+const GSI_SCRIPT_URL = "https://accounts.google.com/gsi/client";
+const GSI_INIT_TIMEOUT_MS = 10_000;
+
+let gisInitPromise: Promise<void> | null = null;
+let gisInitialized = false;
+let missingClientIdLogged = false;
 
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.appdata",
@@ -25,6 +31,109 @@ const SESSION_KEY = "bharti-google-session";
 
 export function hasGoogleClientId(): boolean {
   return CLIENT_ID.length > 0;
+}
+
+function logMissingClientId(): void {
+  if (missingClientIdLogged || typeof window === "undefined") return;
+  missingClientIdLogged = true;
+  console.error(
+    "Google sign-in is not configured. Set VITE_GOOGLE_CLIENT_ID in the environment and rebuild the app.",
+  );
+}
+
+function mapGoogleAuthError(error: unknown): Error {
+  const raw = typeof error === "string" ? error : error instanceof Error ? error.message : "";
+  const lowered = raw.toLowerCase();
+
+  if (lowered.includes("popup_closed") || lowered.includes("popup closed") || lowered.includes("cancel")) {
+    return new Error("Google sign-in was cancelled.");
+  }
+
+  if (lowered.includes("popup_failed") || lowered.includes("popup failed")) {
+    return new Error("Google sign-in popup failed to open. Allow popups and try again.");
+  }
+
+  if (
+    lowered.includes("access_denied") ||
+    lowered.includes("403") ||
+    lowered.includes("verification") ||
+    lowered.includes("not authorized") ||
+    lowered.includes("not currently authorized")
+  ) {
+    return new Error(
+      "This Google account is not currently authorized to access this application. Please add this account as a Test User in Google Cloud Console.",
+    );
+  }
+
+  if (lowered.includes("401") || lowered.includes("unauthorized")) {
+    return new Error("Google rejected this sign-in request. Please try again after refreshing the page.");
+  }
+
+  if (lowered.includes("network")) {
+    return new Error("Network error while contacting Google. Check your connection and try again.");
+  }
+
+  return new Error(raw || "Google sign-in failed.");
+}
+
+export function ensureGoogleIdentityReady(): Promise<void> {
+  if (!hasGoogleClientId()) {
+    logMissingClientId();
+    return Promise.reject(
+      new Error("Google sign-in is not configured for this build. Set VITE_GOOGLE_CLIENT_ID and rebuild the app."),
+    );
+  }
+
+  if (gisInitialized && window.google?.accounts?.oauth2 && window.google?.accounts?.id) {
+    return Promise.resolve();
+  }
+
+  if (gisInitPromise) {
+    return gisInitPromise;
+  }
+
+  gisInitPromise = new Promise((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject(new Error("Google Identity Services can only initialize in the browser."));
+      return;
+    }
+
+    const startedAt = Date.now();
+
+    function tick() {
+      const google = window.google;
+      const oauth2 = google?.accounts?.oauth2;
+      const id = google?.accounts?.id;
+
+      if (oauth2 && id) {
+        if (!gisInitialized) {
+          id.initialize({
+            client_id: CLIENT_ID,
+            callback: () => {},
+            auto_select: false,
+            cancel_on_tap_outside: true,
+          });
+          gisInitialized = true;
+        }
+        resolve();
+        return;
+      }
+
+      if (Date.now() - startedAt >= GSI_INIT_TIMEOUT_MS) {
+        reject(new Error(`Google Identity Services failed to load from ${GSI_SCRIPT_URL}.`));
+        return;
+      }
+
+      window.setTimeout(tick, 50);
+    }
+
+    tick();
+  }).catch((error) => {
+    gisInitPromise = null;
+    throw error;
+  });
+
+  return gisInitPromise;
 }
 
 // ── Session persistence ───────────────────────────────────────────────────────
@@ -69,50 +178,41 @@ async function fetchUserInfo(
 
 /** Triggers the Google OAuth picker and returns a resolved session. */
 export function signIn(): Promise<GoogleSession> {
-  return new Promise((resolve, reject) => {
-    if (!hasGoogleClientId()) {
-      reject(
-        new Error(
-          "Google sign-in is not configured for this build. Set VITE_GOOGLE_CLIENT_ID and rebuild the app.",
-        ),
-      );
-      return;
-    }
-    if (!window.google?.accounts?.oauth2) {
-      reject(new Error("Google Identity Services not loaded yet. Please wait and try again."));
-      return;
-    }
-    const client = window.google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: SCOPES,
-      callback: async (resp) => {
-        if (resp.error || !resp.access_token) {
-          reject(new Error(resp.error_description ?? resp.error ?? "Sign-in cancelled"));
-          return;
-        }
-        try {
-          const info = await fetchUserInfo(resp.access_token);
-          const session: GoogleSession = {
-            userId: info.sub,
-            email: info.email,
-            name: info.name,
-            picture: info.picture,
-            accessToken: resp.access_token,
-            expiresAt: Date.now() + 3500_000, // ~58 min
-          };
-          saveSession(session);
-          resolve(session);
-        } catch (err) {
-          reject(err);
-        }
-      },
-      error_callback: (err) => {
-        reject(new Error(`Google sign-in error: ${err.type}`));
-      },
-    });
-    // empty prompt = silent if session active, otherwise shows picker
-    client.requestAccessToken({ prompt: "" });
-  });
+  return ensureGoogleIdentityReady().then(
+    () =>
+      new Promise<GoogleSession>((resolve, reject) => {
+        const client = window.google!.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: SCOPES,
+          callback: async (resp) => {
+            if (resp.error || !resp.access_token) {
+              reject(mapGoogleAuthError(resp.error_description ?? resp.error ?? "Google sign-in failed."));
+              return;
+            }
+            try {
+              const info = await fetchUserInfo(resp.access_token);
+              const session: GoogleSession = {
+                userId: info.sub,
+                email: info.email,
+                name: info.name,
+                picture: info.picture,
+                accessToken: resp.access_token,
+                expiresAt: Date.now() + 3500_000, // ~58 min
+              };
+              saveSession(session);
+              resolve(session);
+            } catch (err) {
+              reject(mapGoogleAuthError(err));
+            }
+          },
+          error_callback: (err) => {
+            reject(mapGoogleAuthError(err.type));
+          },
+        });
+        // empty prompt = silent if session active, otherwise shows picker
+        client.requestAccessToken({ prompt: "" });
+      }),
+  );
 }
 
 // ── Sign-out ──────────────────────────────────────────────────────────────────
@@ -134,7 +234,7 @@ export function isAuthenticated(): boolean {
 
 /** Returns true when the GIS library script is ready. */
 export function isGISReady(): boolean {
-  return typeof window !== "undefined" && !!window.google?.accounts?.oauth2;
+  return typeof window !== "undefined" && !!window.google?.accounts?.oauth2 && !!window.google?.accounts?.id;
 }
 
 /**

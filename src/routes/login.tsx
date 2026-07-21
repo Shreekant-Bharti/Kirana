@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { signIn } from "../lib/googleAuth";
-import { hasGoogleClientId } from "../lib/googleAuth";
+import { ensureGoogleIdentityReady, hasGoogleClientId, signIn } from "../lib/googleAuth";
 import { driveBackupExists, restoreFromDrive, clearDriveMeta } from "../lib/driveBackup";
 import { useAuth } from "../lib/authContext";
 import { db } from "../lib/db";
@@ -27,18 +26,20 @@ function LoginPage() {
   const [restoring, setRestoring] = useState(false);
   const [restoreMsg, setRestoreMsg] = useState<string | null>(null);
 
-  // Poll until GIS CDN script is ready
   useEffect(() => {
-    let timer: ReturnType<typeof setInterval>;
-    function check() {
-      if (window.google?.accounts?.oauth2) {
-        setGisReady(true);
-        clearInterval(timer);
-      }
-    }
-    check();
-    timer = setInterval(check, 200);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    ensureGoogleIdentityReady()
+      .then(() => {
+        if (!cancelled) setGisReady(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Google sign-in failed to initialize.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleSignIn() {

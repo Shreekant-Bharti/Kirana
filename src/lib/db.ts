@@ -24,10 +24,21 @@ export interface MetaEntry {
   value: unknown;
 }
 
+export interface SyncTask {
+  id?: number;
+  customerId: number;
+  action: "upsert" | "delete";
+  createdAt: number;
+  attempts: number;
+  lastAttempt?: number;
+  status: "pending" | "syncing" | "failed";
+}
+
 class UdhariDB extends Dexie {
   customers!: Table<Customer, number>;
   transactions!: Table<Transaction, number>;
   meta!: Table<MetaEntry, string>;
+  syncQueue!: Table<SyncTask, number>;
 
   constructor() {
     super("bharti_udhari");
@@ -52,6 +63,13 @@ class UdhariDB extends Dexie {
       customers: "++id, name, createdAt",
       transactions: "++id, customerId, serial, date, createdAt",
       meta: "&key",
+    });
+    // v4: syncQueue table for offline-first auto-sync
+    this.version(4).stores({
+      customers: "++id, name, createdAt",
+      transactions: "++id, customerId, serial, date, createdAt",
+      meta: "&key",
+      syncQueue: "++id, customerId, status, createdAt",
     });
   }
 }

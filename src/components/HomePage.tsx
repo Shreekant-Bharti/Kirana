@@ -4,6 +4,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { Search, X, Plus, ChevronRight, Users, UserPlus, SearchX } from "lucide-react";
 import { db, formatINR } from "../lib/db";
 import { isDuplicateCustomerName, normalizeName } from "../lib/backup/validation";
+import { useSyncTrigger } from "../lib/sync/syncHooks";
 import { TopBar } from "./TopBar";
 import { EmptyState, ListSkeleton } from "./EmptyState";
 import { Sheet, SheetButtons } from "./Sheet";
@@ -42,6 +43,7 @@ export default function HomePage() {
   const [newMobile, setNewMobile] = useState("");
   const [newWhatsapp, setNewWhatsapp] = useState("");
   const [showAdd, setShowAdd] = useState(false);
+  const { notifyChange } = useSyncTrigger();
 
   const rows = useLiveQuery<CustomerRow[] | undefined>(async () => {
     const all = await db.customers.orderBy("name").toArray();
@@ -85,13 +87,14 @@ export default function HomePage() {
       return;
     }
     const now = Date.now();
-    await db.customers.add({
+    const id = await db.customers.add({
       name,
       createdAt: now,
       updatedAt: now,
       mobileNumber: newMobile || undefined,
       whatsappNumber: newWhatsapp || undefined,
     });
+    notifyChange(id);
     setNewName("");
     setNewMobile("");
     setNewWhatsapp("");

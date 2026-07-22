@@ -10,6 +10,7 @@ import {
   nextSerial,
   type Transaction,
 } from "../lib/db";
+import { useSyncTrigger } from "../lib/sync/syncHooks";
 import { getShopName, getIncludeShopName } from "../lib/communicationSettings";
 import { TopBar } from "../components/TopBar";
 import { Sheet, SheetButtons } from "../components/Sheet";
@@ -78,6 +79,7 @@ function CustomerPage() {
   const { id } = useParams({ from: "/customer/$id" });
   const customerId = Number(id);
   const navigate = useNavigate();
+  const { notifyChange } = useSyncTrigger();
 
   const customer = useLiveQuery(() => db.customers.get(customerId), [customerId]);
   const txs =
@@ -155,6 +157,7 @@ function CustomerPage() {
       whatsappNumber: editCustWhatsapp || undefined,
       updatedAt: Date.now(),
     });
+    notifyChange(customerId);
     setShowEditCustomer(false);
   }
 
@@ -197,6 +200,8 @@ function CustomerPage() {
       date: todayDDMMYYYY(),
       createdAt: Date.now(),
     });
+    await db.customers.update(customerId, { updatedAt: Date.now() });
+    notifyChange(customerId);
     setItem("");
     setPrice("");
     setShowAdd(false);
@@ -209,6 +214,8 @@ function CustomerPage() {
       price: editTx.price,
       date: editTx.date,
     });
+    await db.customers.update(customerId, { updatedAt: Date.now() });
+    notifyChange(customerId);
     setEditTx(null);
   }
 
@@ -226,12 +233,15 @@ function CustomerPage() {
         }
       }
     });
+    await db.customers.update(customerId, { updatedAt: Date.now() });
+    notifyChange(customerId);
     setDeleteTx(null);
   }
 
   async function deleteCustomer() {
     await db.transactions.where("customerId").equals(customerId).delete();
     await db.customers.delete(customerId);
+    notifyChange(customerId, "delete");
     navigate({ to: "/" });
   }
 

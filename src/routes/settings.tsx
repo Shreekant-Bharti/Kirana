@@ -5,8 +5,8 @@ import {
   User, Database, FileDown, FileUp, FileJson, FileSpreadsheet, HardDrive,
   Fingerprint, Lock, Clock, Sun, Moon, SunMoon, Info, Shield, FileText,
   Trash2, Printer, Sparkles, FolderOpen, Cloud, RefreshCw, CheckCircle2, CloudUpload,
-  MessageCircle, Store, QrCode, Link as LinkIcon, LogOut, CloudUpload as DriveIcon,
-  CloudDownload,
+  MessageCircle, Store, QrCode, Link as LinkIcon, LogOut, CloudDownload,
+  Wifi, WifiOff, CircleDot,
 } from "lucide-react";
 import { loadDemoData } from "../lib/seed";
 import { db } from "../lib/db";
@@ -30,8 +30,11 @@ import {
   getIncludeShopName, setIncludeShopName as saveIncludeShopName,
 } from "../lib/communicationSettings";
 import { useAuth } from "../lib/authContext";
-import { signOut } from "../lib/googleAuth";
-import { backupToDrive, restoreFromDrive, getLastDriveBackup, clearDriveMeta } from "../lib/driveBackup";
+import { requestDrivePermission, signOut } from "../lib/googleAuth";
+import { getLastDriveBackup, clearDriveMeta } from "../lib/driveBackup";
+import { fullSync } from "../lib/sync/syncEngine";
+import { useSyncStatus } from "../lib/sync/syncStatus";
+import { clearQueue } from "../lib/sync/syncQueue";
 
 const APP_VERSION = "1.0.0";
 
@@ -72,6 +75,7 @@ function SettingsPage() {
   const [includeShopName, setIncludeShopNameState] = useState(true);
   const [showShopNameEdit, setShowShopNameEdit] = useState(false);
   const [shopNameInput, setShopNameInput] = useState("");
+  const syncStatus = useSyncStatus();
 
   const fsaSupported = isFileSystemAccessSupported();
   const customerCount = useLiveQuery(() => db.customers.count(), []) ?? 0;
@@ -92,26 +96,16 @@ function SettingsPage() {
     setTimeout(() => setToast(null), 1800);
   }
 
-  // ── Drive backup / restore ──────────────────────────────────────────────────
-  async function doDriveBackup() {
+  // ── Drive sync ────────────────────────────────────────────────────────────────────
+  async function doSyncNow() {
     setDriveBusy(true);
     try {
-      const r = await backupToDrive();
-      setLastDriveBackupState(r.lastBackup);
-      flash(`Drive Backup Complete · ${r.updated} updated, ${r.unchanged} unchanged`);
+      await requestDrivePermission("Google Drive permission is required for cloud sync.");
+      const r = await fullSync();
+      setLastDriveBackupState(new Date().toISOString());
+      flash(`Sync Complete · ${r.updated} updated, ${r.unchanged} unchanged`);
     } catch (e) {
-      flash(e instanceof Error ? e.message : "Drive backup failed");
-    } finally { setDriveBusy(false); }
-  }
-
-  async function doDriveRestore() {
-    setDriveBusy(true);
-    try {
-      const r = await restoreFromDrive();
-      setLastDriveBackupState(getLastDriveBackup());
-      flash(`Restore Complete · ${r.customers} customers, ${r.transactions} txns`);
-    } catch (e) {
-      flash(e instanceof Error ? e.message : "Drive restore failed");
+      flash(e instanceof Error ? e.message : "Sync failed");
     } finally { setDriveBusy(false); }
   }
 
@@ -128,6 +122,7 @@ function SettingsPage() {
     setConfirmClearData(false);
     await clearAll();
     clearDriveMeta();
+    await clearQueue();
     navigate({ to: "/login", replace: true });
   }
 
@@ -254,29 +249,48 @@ function SettingsPage() {
                 </div>
               </div>
             </div>
+            {/* Sync status */}
+            <Row
+              icon={
+                syncStatus.state === "syncing" ? <RefreshCw size={16} className="animate-spin" /> :
+                syncStatus.state === "offline" ? <WifiOff size={16} /> :
+                syncStatus.state === "synced" ? <CheckCircle2 size={16} /> :
+                syncStatus.state === "error" ? <CircleDot size={16} /> :
+                <Cloud size={16} />
+              }
+              iconBg={
+                syncStatus.state === "synced" ? "#34c759" :
+                syncStatus.state === "pending" ? "#ff9500" :
+                syncStatus.state === "syncing" ? "#007aff" :
+                syncStatus.state === "offline" ? "#ff3b30" :
+                syncStatus.state === "error" ? "#ff3b30" : "#8e8e93"
+              }
+              label="Sync Status"
+              value={
+                syncStatus.state === "synced" ? "All synced" :
+                syncStatus.state === "pending" ? `${syncStatus.pendingCount} pending` :
+                syncStatus.state === "syncing" ? "Syncing…" :
+                syncStatus.state === "offline" ? "Offline" :
+                syncStatus.state === "error" ? (syncStatus.error ?? "Error") : "—"
+              }
+            />
             <Row
               icon={driveBusy ? <RefreshCw size={16} className="animate-spin" /> : <CloudUpload size={16} />}
               iconBg="#007aff"
-              label={driveBusy ? "Working…" : "Backup Now (Drive)"}
-              onClick={!driveBusy ? doDriveBackup : undefined}
-            />
-            <Row
-              icon={<CloudDownload size={16} />}
-              iconBg="#34c759"
-              label="Restore from Drive"
-              onClick={!driveBusy ? doDriveRestore : undefined}
+              label={driveBusy ? "Syncing…" : "Sync Now"}
+              onClick={!driveBusy ? doSyncNow : undefined}
             />
             <Row
               icon={<CheckCircle2 size={16} />}
               iconBg={lastDriveBackup ? "#34c759" : "#8e8e93"}
-              label="Last Drive Backup"
+              label="Last Sync"
               value={lastDriveBackup ? formatTime(lastDriveBackup) : "Never"}
             />
             <Row
               icon={<LogOut size={16} />}
               iconBg="#ff3b30"
               label="Logout"
-              labelColor="var(--danger)"
+              danger
               onClick={() => setConfirmLogout(true)}
             />
           </Group>
@@ -341,8 +355,8 @@ function SettingsPage() {
               value={lastResult}
             />
           )}
-          <Row icon={<Cloud size={16} />} iconBg="#0a84ff" label="Google Drive Sync" right={<SoonBadge />} />
-          <Row icon={<Clock size={16} />} iconBg="#ff9500" label="Auto Backup" right={<SoonBadge />} />
+          <Row icon={<Cloud size={16} />} iconBg="#0a84ff" label="Google Drive Sync" value="Automatic" />
+          <Row icon={<Clock size={16} />} iconBg="#ff9500" label="Auto Backup" value="Enabled" />
         </Group>
 
         {/* Data */}

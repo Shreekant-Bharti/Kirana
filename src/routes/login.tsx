@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ensureGoogleIdentityReady, hasGoogleClientId, signIn } from "../lib/googleAuth";
-import { driveBackupExists, restoreFromDrive, clearDriveMeta } from "../lib/driveBackup";
-import { useAuth } from "../lib/authContext";
+import { ensureGoogleIdentityReady, hasGoogleClientId, signIn, hasDrivePermission } from "../lib/googleAuth";
+import { restoreFromDrive, driveBackupExists, clearDriveMeta } from "../lib/driveBackup";
 import { db } from "../lib/db";
+import { useAuth } from "../lib/authContext";
 import { Sheet } from "../components/Sheet";
 import type { GoogleSession } from "../lib/googleAuth";
 
@@ -48,26 +48,27 @@ function LoginPage() {
     try {
       const session = await signIn();
 
-      const localCount = await db.customers.count();
-      let hasDrive = false;
-      try {
-        hasDrive = await driveBackupExists();
-      } catch {
-        /* offline */
+      // Auto-restore logic for new device
+      if (hasDrivePermission(session)) {
+        const localCustomerCount = await db.customers.count();
+        const cloudExists = await driveBackupExists().catch(() => false);
+
+        if (cloudExists && localCustomerCount === 0) {
+          // New device with empty local DB → auto-restore
+          await doRestore(session);
+          return; // doRestore calls finishLogin
+        } else if (cloudExists && localCustomerCount > 0) {
+          // Both local and cloud data exist → show conflict dialog
+          setPendingSession(session);
+          setConflictMsg(
+            `This device has ${localCustomerCount} customer${localCustomerCount === 1 ? "" : "s"} locally, but a cloud backup also exists.`,
+          );
+          setShowConflict(true);
+          setLoading(false);
+          return;
+        }
       }
 
-      if (localCount > 0 && hasDrive) {
-        setPendingSession(session);
-        setConflictMsg(
-          `You have ${localCount} local customer${localCount !== 1 ? "s" : ""} and a Google Drive backup.`,
-        );
-        setShowConflict(true);
-        return;
-      }
-      if (localCount === 0 && hasDrive) {
-        await doRestore(session);
-        return;
-      }
       finishLogin(session);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed. Please try again.");

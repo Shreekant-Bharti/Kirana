@@ -1,6 +1,45 @@
 import { Link } from "@tanstack/react-router";
-import { BookMarked, Printer, Settings as SettingsIcon, ChevronLeft } from "lucide-react";
+import { BookMarked, Printer, Settings as SettingsIcon, ChevronLeft, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
+import { useSyncStatus, type SyncStatus } from "../lib/sync/syncStatus";
+
+function SyncDot() {
+  const status: SyncStatus = useSyncStatus();
+
+  if (status.state === "syncing") {
+    return (
+      <div className="grid h-5 w-5 place-items-center" title="Syncing...">
+        <RefreshCw size={12} className="animate-spin text-[color:var(--accent)]" />
+      </div>
+    );
+  }
+
+  const colors: Record<string, string> = {
+    synced: "#34c759",
+    pending: "#ff9500",
+    offline: "#ff3b30",
+    error: "#ff3b30",
+  };
+
+  const labels: Record<string, string> = {
+    synced: "Synced",
+    pending: `${status.pendingCount} pending`,
+    offline: "Offline",
+    error: status.error ?? "Sync error",
+  };
+
+  return (
+    <div
+      className="grid h-5 w-5 place-items-center"
+      title={labels[status.state] ?? ""}
+    >
+      <span
+        className="block h-2 w-2 rounded-full"
+        style={{ backgroundColor: colors[status.state] ?? "#8e8e93" }}
+      />
+    </div>
+  );
+}
 
 export function TopBar({
   title,
@@ -33,7 +72,7 @@ export function TopBar({
           )}
         </div>
         <h1 className="flex-1 truncate text-center text-[17px] font-semibold">{title}</h1>
-        <div className="flex w-[64px] items-center justify-end gap-1">
+        <div className="flex w-[64px] items-center justify-end gap-0.5">
           {right}
           {onPrint && (
             <button onClick={onPrint} aria-label="Print" className="tap grid h-10 w-10 place-items-center rounded-lg text-[color:var(--accent)]">
@@ -41,12 +80,16 @@ export function TopBar({
             </button>
           )}
           {!showBack && (
-            <Link to="/settings" aria-label="Settings" className="tap grid h-10 w-10 place-items-center rounded-lg text-[color:var(--accent)]">
-              <SettingsIcon size={20} />
-            </Link>
+            <>
+              <SyncDot />
+              <Link to="/settings" aria-label="Settings" className="tap grid h-10 w-10 place-items-center rounded-lg text-[color:var(--accent)]">
+                <SettingsIcon size={20} />
+              </Link>
+            </>
           )}
         </div>
       </div>
     </header>
   );
 }
+

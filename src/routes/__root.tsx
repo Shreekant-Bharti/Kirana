@@ -17,6 +17,7 @@ import { getSession } from "../lib/googleAuth";
 import { AuthProvider, useAuth } from "../lib/authContext";
 import { InstallPrompt } from "../components/InstallPrompt";
 import { UpdatePrompt } from "../components/UpdatePrompt";
+import { initSyncEngine, destroySyncEngine } from "../lib/sync/syncEngine";
 
 // ── Service worker registration ───────────────────────────────────────────────
 
@@ -173,6 +174,21 @@ function AuthGuard({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+// ── Sync Manager (background) ─────────────────────────────────────────────────
+
+/** Invisible component that manages the sync engine lifecycle. */
+function SyncManager() {
+  const { session } = useAuth();
+
+  useEffect(() => {
+    if (!session) return;
+    initSyncEngine();
+    return () => destroySyncEngine();
+  }, [session]);
+
+  return null;
+}
+
 // ── Root component ────────────────────────────────────────────────────────────
 
 function RootComponent() {
@@ -189,6 +205,7 @@ function RootComponent() {
         <AuthGuard>
           <Outlet />
         </AuthGuard>
+        <SyncManager />
         <InstallPrompt />
         <UpdatePrompt />
       </QueryClientProvider>

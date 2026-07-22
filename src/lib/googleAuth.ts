@@ -12,11 +12,8 @@ let gisInitPromise: Promise<void> | null = null;
 let gisInitialized = false;
 let missingClientIdLogged = false;
 
-const SCOPES = [
-  "https://www.googleapis.com/auth/drive.appdata",
-  "https://www.googleapis.com/auth/userinfo.email",
-  "https://www.googleapis.com/auth/userinfo.profile",
-].join(" ");
+const BASIC_SCOPES = ["openid", "email", "profile"];
+export const DRIVE_APPDATA_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 
 export interface GoogleSession {
   userId: string;
@@ -25,12 +22,56 @@ export interface GoogleSession {
   picture: string;
   accessToken: string;
   expiresAt: number; // Unix ms
+  grantedScopes?: string[];
 }
 
 const SESSION_KEY = "bharti-google-session";
 
 export function hasGoogleClientId(): boolean {
   return CLIENT_ID.length > 0;
+}
+
+function normalizeScopes(scopes: string[]): string[] {
+  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean)));
+}
+
+function scopeString(scopes: string[]): string {
+  return normalizeScopes(scopes).join(" ");
+}
+
+function scopesFromResponse(scope: string | undefined, fallback: string[]): string[] {
+  const parsed = normalizeScopes((scope ?? "").split(/\s+/).filter(Boolean));
+  return parsed.length > 0 ? parsed : normalizeScopes(fallback);
+}
+
+function sessionScopes(session: GoogleSession | null): string[] {
+  return normalizeScopes(session?.grantedScopes ?? BASIC_SCOPES);
+}
+
+function hasScope(session: GoogleSession | null, scope: string): boolean {
+  return sessionScopes(session).includes(scope);
+}
+
+export function hasDrivePermission(session: GoogleSession | null = getSession()): boolean {
+  return hasScope(session, DRIVE_APPDATA_SCOPE);
+}
+
+function requestToken(
+  scopes: string[],
+  prompt: "" | "consent" = "",
+): Promise<{ access_token?: string; scope?: string; error?: string; error_description?: string }> {
+  return ensureGoogleIdentityReady().then(
+    () =>
+      new Promise((resolve, reject) => {
+        const client = window.google!.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: scopeString(scopes),
+          callback: (resp) => resolve(resp),
+          error_callback: (err) => reject(new Error(err.type)),
+        });
+        client.requestAccessToken({ prompt });
+      }),
+  );
 }
 
 function logMissingClientId(): void {
@@ -92,7 +133,7 @@ export function ensureGoogleIdentityReady(): Promise<void> {
     return gisInitPromise;
   }
 
-  gisInitPromise = new Promise((resolve, reject) => {
+  gisInitPromise = new Promise<void>((resolve, reject) => {
     if (typeof window === "undefined") {
       reject(new Error("Google Identity Services can only initialize in the browser."));
       return;
@@ -128,30 +169,34 @@ export function ensureGoogleIdentityReady(): Promise<void> {
     }
 
     tick();
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     gisInitPromise = null;
     throw error;
-  });
+  }) as Promise<void>;
 
   return gisInitPromise;
 }
 
 // ── Session persistence ───────────────────────────────────────────────────────
+// Session NEVER expires on its own — only explicit signOut() clears it.
+// The access token may expire, but the user identity persists.
 
 export function getSession(): GoogleSession | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
-    const s = JSON.parse(raw) as GoogleSession;
-    if (Date.now() >= s.expiresAt) {
-      localStorage.removeItem(SESSION_KEY);
-      return null;
-    }
-    return s;
+    return JSON.parse(raw) as GoogleSession;
   } catch {
     return null;
   }
+}
+
+/** Returns true when the access token is still valid (>5 min remaining). */
+export function isTokenFresh(session?: GoogleSession | null): boolean {
+  const s = session ?? getSession();
+  if (!s) return false;
+  return s.expiresAt - Date.now() > 5 * 60_000;
 }
 
 function saveSession(s: GoogleSession): void {
@@ -178,41 +223,75 @@ async function fetchUserInfo(
 
 /** Triggers the Google OAuth picker and returns a resolved session. */
 export function signIn(): Promise<GoogleSession> {
-  return ensureGoogleIdentityReady().then(
-    () =>
-      new Promise<GoogleSession>((resolve, reject) => {
-        const client = window.google!.accounts.oauth2.initTokenClient({
-          client_id: CLIENT_ID,
-          scope: SCOPES,
-          callback: async (resp) => {
-            if (resp.error || !resp.access_token) {
-              reject(mapGoogleAuthError(resp.error_description ?? resp.error ?? "Google sign-in failed."));
-              return;
-            }
-            try {
-              const info = await fetchUserInfo(resp.access_token);
-              const session: GoogleSession = {
-                userId: info.sub,
-                email: info.email,
-                name: info.name,
-                picture: info.picture,
-                accessToken: resp.access_token,
-                expiresAt: Date.now() + 3500_000, // ~58 min
-              };
-              saveSession(session);
-              resolve(session);
-            } catch (err) {
-              reject(mapGoogleAuthError(err));
-            }
-          },
-          error_callback: (err) => {
-            reject(mapGoogleAuthError(err.type));
-          },
-        });
-        // empty prompt = silent if session active, otherwise shows picker
-        client.requestAccessToken({ prompt: "" });
-      }),
-  );
+  return requestToken(BASIC_SCOPES).then(async (resp) => {
+    if (resp.error || !resp.access_token) {
+      throw mapGoogleAuthError(resp.error_description ?? resp.error ?? "Google sign-in failed.");
+    }
+
+    try {
+      const info = await fetchUserInfo(resp.access_token);
+      const session: GoogleSession = {
+        userId: info.sub,
+        email: info.email,
+        name: info.name,
+        picture: info.picture,
+        accessToken: resp.access_token,
+        expiresAt: Date.now() + 3500_000, // ~58 min
+        grantedScopes: scopesFromResponse(resp.scope, BASIC_SCOPES),
+      };
+      saveSession(session);
+      return session;
+    } catch (err) {
+      throw mapGoogleAuthError(err);
+    }
+  });
+}
+
+export async function requestDrivePermission(actionMessage: string): Promise<GoogleSession> {
+  const session = getSession();
+  if (!session) {
+    throw new Error("Sign in with Google first.");
+  }
+
+  if (hasDrivePermission(session)) {
+    return session;
+  }
+
+  try {
+    const requestedScopes = [...sessionScopes(session), DRIVE_APPDATA_SCOPE];
+    const resp = await requestToken(requestedScopes, "consent");
+    if (resp.error || !resp.access_token) {
+      throw new Error(resp.error_description ?? resp.error ?? "Google Drive permission request failed.");
+    }
+    const updated: GoogleSession = {
+      ...session,
+      accessToken: resp.access_token,
+      expiresAt: Date.now() + 3500_000,
+      grantedScopes: scopesFromResponse(resp.scope, requestedScopes),
+    };
+    saveSession(updated);
+    return updated;
+  } catch (err) {
+    const message = err instanceof Error ? err.message.toLowerCase() : "";
+    if (
+      message.includes("access_denied") ||
+      message.includes("403") ||
+      message.includes("not authorized") ||
+      message.includes("not currently authorized")
+    ) {
+      throw new Error(actionMessage);
+    }
+    if (message.includes("popup_closed") || message.includes("popup closed") || message.includes("cancel")) {
+      throw new Error("Google Drive permission request was cancelled.");
+    }
+    if (message.includes("popup_failed") || message.includes("popup failed")) {
+      throw new Error("Google Drive permission popup failed to open. Allow popups and try again.");
+    }
+    if (message.includes("network")) {
+      throw new Error("Network error while contacting Google. Check your connection and try again.");
+    }
+    throw mapGoogleAuthError(err);
+  }
 }
 
 // ── Sign-out ──────────────────────────────────────────────────────────────────
@@ -248,7 +327,7 @@ export function silentRefresh(): Promise<GoogleSession | null> {
       resolve(null);
       return;
     }
-    if (s.expiresAt - Date.now() > 5 * 60_000) {
+    if (isTokenFresh(s)) {
       resolve(s);
       return;
     }
@@ -261,9 +340,10 @@ export function silentRefresh(): Promise<GoogleSession | null> {
       return;
     } // can't refresh, return stale
 
+    const scopes = sessionScopes(s);
     const client = window.google!.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
-      scope: SCOPES,
+      scope: scopeString(scopes),
       callback: (resp) => {
         if (resp.error || !resp.access_token) {
           resolve(s);
@@ -273,6 +353,7 @@ export function silentRefresh(): Promise<GoogleSession | null> {
           ...s,
           accessToken: resp.access_token,
           expiresAt: Date.now() + 3500_000,
+          grantedScopes: scopesFromResponse(resp.scope, scopes),
         };
         saveSession(updated);
         resolve(updated);
@@ -280,4 +361,25 @@ export function silentRefresh(): Promise<GoogleSession | null> {
     });
     client.requestAccessToken({ prompt: "" });
   });
+}
+
+/**
+ * Ensures a fresh access token is available before any API call.
+ * If the token is stale, silently refreshes it.
+ * Throws if the user is not signed in.
+ * Returns the valid session with a fresh token.
+ */
+export async function ensureFreshToken(): Promise<GoogleSession> {
+  const s = getSession();
+  if (!s) throw new Error("Not signed in to Google");
+  if (isTokenFresh(s)) return s;
+
+  // Attempt silent refresh
+  const refreshed = await silentRefresh();
+  if (refreshed && isTokenFresh(refreshed)) return refreshed;
+
+  // Token is stale and refresh failed (likely offline) — return stale session
+  // Caller will get a 401 from the API and handle it
+  if (refreshed) return refreshed;
+  return s;
 }
